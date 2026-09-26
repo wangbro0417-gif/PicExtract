@@ -85,7 +85,7 @@ st.markdown("""
         background-color: #1D4ED8 !important;
     }
     .anki-btn button {
-        background-color: #4F46E5 !important; /* Anki 인디고 블루 */
+        background-color: #4F46E5 !important;
         color: #FFFFFF !important;
         border: none !important;
         border-radius: 10px !important;
@@ -94,7 +94,7 @@ st.markdown("""
         box-shadow: 0 4px 10px rgba(79, 70, 229, 0.25) !important;
     }
     .zip-btn button {
-        background-color: #059669 !important; /* 에메랄드 그린 */
+        background-color: #059669 !important;
         color: #FFFFFF !important;
         border: none !important;
         border-radius: 10px !important;
@@ -129,14 +129,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- 헤더 -----------------
+# ----------------- 상단 비주얼 헤더 -----------------
 st.markdown("""
 <div class="main-card">
     <span class="badge">STUDY ACCELERATOR</span>
     <div class="main-title">PicExtract</div>
     <div class="main-subtitle">
         강의 슬라이드에서 <b>배경과 필기를 제외한 핵심 의학 도표</b>만 추출하여<br>
-        즉시 학습 가능한 <b>Anki 덱(.apkg)</b> 및 압축 파일로 변환합니다.
+        파일명 기반의 <b>Anki 덱(.apkg)</b> 및 압축 파일로 변환합니다.
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -156,7 +156,7 @@ def is_meaningful_image(image_bytes: bytes) -> bool:
             pixels = list(thumb.getdata())
             total_pixels = len(pixels)
 
-            # 중앙 영역 공백 검사 (배경 템플릿 테두리 제거)
+            # 중앙 영역 공백 검사 (배경 테두리/로고 제거)
             center_blank = sum(
                 1 for y in range(25, 125) for x in range(25, 125)
                 if pixels[y * 150 + x][3] <= 20
@@ -166,7 +166,7 @@ def is_meaningful_image(image_bytes: bytes) -> bool:
             if (center_blank / 10000) > 0.95:
                 return False
 
-            # 필기 패턴 검사
+            # 필기 패턴 검사 (단색 스트로크 제거)
             non_bg_count = 0
             visible_count = 0
             non_bg_colors = []
@@ -191,16 +191,14 @@ def is_meaningful_image(image_bytes: bytes) -> bool:
     return True
 
 
-# ----------------- Anki 덱 빌더 함수 -----------------
-def generate_anki_package(image_records: list, deck_title: str) -> bytes:
+# ----------------- Anki 덱 빌더 엔진 (파일명 기반) -----------------
+def generate_anki_package(image_records: list) -> bytes:
     """
-    image_records: [(filename, image_bytes, page_info_text), ...]
-    Anki 덱과 미디어 파일을 패키징하여 .apkg 바이트 데이터를 반환합니다.
+    image_records: [(filename, image_bytes, page_info_text, doc_name), ...]
+    파일명을 개별 덱 이름으로 매핑하여 .apkg 바이너리를 생성합니다.
     """
     model_id = random.randrange(1 << 30, 1 << 31)
-    deck_id = random.randrange(1 << 30, 1 << 31)
 
-    # 심플하고 가독성 좋은 Anki 카드 모델 정의
     my_model = genanki.Model(
         model_id,
         "PicExtract Medical Card",
@@ -213,7 +211,7 @@ def generate_anki_package(image_records: list, deck_title: str) -> bytes:
             {
                 "name": "Card 1",
                 "qfmt": """
-                    <div style="font-family: Arial; text-align: center; color: #475569; font-size: 13px; margin-bottom: 8px;">
+                    <div style="font-family: -apple-system, sans-serif; text-align: center; color: #64748B; font-size: 13px; margin-bottom: 8px;">
                         {{SourceInfo}}
                     </div>
                     <div style="text-align: center;">
@@ -223,7 +221,7 @@ def generate_anki_package(image_records: list, deck_title: str) -> bytes:
                 "afmt": """
                     {{FrontSide}}
                     <hr id="answer" style="border: 0; border-top: 1px solid #CBD5E1; margin: 16px 0;">
-                    <div style="font-family: Arial; text-align: center; color: #0F172A; font-size: 16px; font-weight: bold;">
+                    <div style="font-family: -apple-system, sans-serif; text-align: center; color: #0F172A; font-size: 15px; font-weight: 600;">
                         {{Notes}}
                     </div>
                 """,
@@ -233,30 +231,35 @@ def generate_anki_package(image_records: list, deck_title: str) -> bytes:
             .card {
                 background-color: #FFFFFF;
                 border-radius: 8px;
-                padding: 14px;
+                padding: 16px;
             }
             img {
                 max-width: 95%;
-                max-height: 520px;
+                max-height: 540px;
                 height: auto;
                 border-radius: 6px;
-                box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+                box-shadow: 0 2px 8px rgba(0,0,0,0.08);
             }
         """
     )
 
-    my_deck = genanki.Deck(deck_id, f"PicExtract::{deck_title}")
+    decks = {}
     media_files = []
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        for fname, img_bytes, src_info in image_records:
-            # Anki 미디어 디렉토리용 임시 파일 저장
+        for fname, img_bytes, src_info, doc_name in image_records:
+            # 파일명을 Anki 덱 이름으로 직접 사용
+            clean_deck_name = doc_name.replace("::", "_").strip()
+            
+            if clean_deck_name not in decks:
+                deck_id = random.randrange(1 << 30, 1 << 31)
+                decks[clean_deck_name] = genanki.Deck(deck_id, clean_deck_name)
+
             temp_path = Path(tmpdir) / fname
             with open(temp_path, "wb") as f:
                 f.write(img_bytes)
             media_files.append(str(temp_path))
 
-            # 카드 추가 (앞면: 그림, 뒷면: 슬라이드 출처/메모)
             note = genanki.Note(
                 model=my_model,
                 fields=[
@@ -265,9 +268,9 @@ def generate_anki_package(image_records: list, deck_title: str) -> bytes:
                     "확인 완료"
                 ]
             )
-            my_deck.add_note(note)
+            decks[clean_deck_name].add_note(note)
 
-        pkg = genanki.Package(my_deck)
+        pkg = genanki.Package(list(decks.values()))
         pkg.media_files = media_files
 
         output_apkg_path = Path(tmpdir) / "output.apkg"
@@ -311,7 +314,7 @@ if uploaded_files:
                                 if is_meaningful_image(b):
                                     fname = f"{base_name}_p{p_idx+1}_{img_idx+1}.{ext}"
                                     zip_out.writestr(fname, b)
-                                    image_records.append((fname, b, f"{base_name} (Page {p_idx+1})"))
+                                    image_records.append((fname, b, f"{base_name} (Page {p_idx+1})", base_name))
                                     total_saved += 1
                                 else:
                                     total_skipped += 1
@@ -327,7 +330,7 @@ if uploaded_files:
                                         ext = Path(item.filename).suffix
                                         fname = f"{base_name}_img{counter}{ext}"
                                         zip_out.writestr(fname, b)
-                                        image_records.append((fname, b, f"{base_name} (Image {counter})"))
+                                        image_records.append((fname, b, f"{base_name} (Image {counter})", base_name))
                                         counter += 1
                                         total_saved += 1
                                     else:
@@ -336,11 +339,13 @@ if uploaded_files:
             if total_saved > 0:
                 st.success(f"✔ 처리 완료: 총 {total_saved}장의 유효 도표를 확보했습니다. ({total_skipped}개 배경/필기 자동 제외)")
                 
-                # Anki 덱 생성
-                first_doc_title = Path(uploaded_files[0].name).stem
-                apkg_data = generate_anki_package(image_records, first_doc_title)
+                # 파일명 기반 Anki 덱 생성
+                apkg_data = generate_anki_package(image_records)
 
-                # 다운로드 버튼 영역 (2단 분할)
+                first_doc_title = Path(uploaded_files[0].name).stem
+                file_deck_name = first_doc_title if len(uploaded_files) == 1 else f"{first_doc_title}_외_{len(uploaded_files)-1}건"
+
+                # 2단 다운로드 버튼
                 col1, col2 = st.columns(2)
                 
                 with col1:
@@ -348,7 +353,7 @@ if uploaded_files:
                     st.download_button(
                         label="⚡ Anki 덱(.apkg) 다운로드",
                         data=apkg_data,
-                        file_name=f"{first_doc_title}_Deck.apkg",
+                        file_name=f"{file_deck_name}.apkg",
                         mime="application/octet-stream"
                     )
                     st.markdown('</div>', unsafe_allow_html=True)
@@ -358,7 +363,7 @@ if uploaded_files:
                     st.download_button(
                         label="📦 이미지 ZIP 다운로드",
                         data=zip_buffer.getvalue(),
-                        file_name=f"{first_doc_title}_images.zip",
+                        file_name=f"{file_deck_name}_images.zip",
                         mime="application/zip"
                     )
                     st.markdown('</div>', unsafe_allow_html=True)
@@ -373,8 +378,8 @@ st.markdown("""
         <div class="feature-desc">배경 슬라이드 틀과 손필기를 배제하고 순수 다이어그램만 선별</div>
     </div>
     <div class="feature-item">
-        <div class="feature-title">⚡ Anki 즉시 임포트</div>
-        <div class="feature-desc">출처 페이지 정보가 매핑된 카드 덱(.apkg) 더블 클릭으로 추가</div>
+        <div class="feature-title">⚡ 파일명 자동 매핑</div>
+        <div class="feature-desc">슬라이드 문서 이름 그대로 Anki 덱 생성 및 페이지 번호 기록</div>
     </div>
     <div class="feature-item">
         <div class="feature-title">🏷️ 이미지 오클루전 대비</div>
