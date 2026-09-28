@@ -189,7 +189,7 @@ def is_meaningful_image(image_bytes: bytes) -> bool:
     return True
 
 
-# ----------------- Anki 패키지 빌더 -----------------
+# ----------------- Anki 패키지 빌더 (캡션 연동형) -----------------
 def generate_anki_package(selected_records: list) -> bytes:
     model_id = random.randrange(1 << 30, 1 << 31)
     my_model = genanki.Model(
@@ -198,7 +198,7 @@ def generate_anki_package(selected_records: list) -> bytes:
         fields=[
             {"name": "Image"},
             {"name": "SourceInfo"},
-            {"name": "Notes"},
+            {"name": "CaptionText"},  # 텍스트 캡션 필드 추가
         ],
         templates=[
             {
@@ -214,8 +214,8 @@ def generate_anki_package(selected_records: list) -> bytes:
                 "afmt": """
                     {{FrontSide}}
                     <hr id="answer" style="border: 0; border-top: 1px solid #CBD5E1; margin: 16px 0;">
-                    <div style="font-family: -apple-system, sans-serif; text-align: center; color: #0F172A; font-size: 15px; font-weight: 600;">
-                        {{Notes}}
+                    <div style="font-family: -apple-system, sans-serif; text-align: left; color: #0F172A; font-size: 13px; line-height: 1.4; background: #F8FAFC; padding: 10px; border-radius: 6px;">
+                        <b>Context:</b><br>{{CaptionText}}
                     </div>
                 """,
             },
@@ -235,6 +235,7 @@ def generate_anki_package(selected_records: list) -> bytes:
             img_bytes = item["bytes"]
             src_info = item["src_info"]
             doc_name = item["doc_name"]
+            caption = item.get("caption", "추출된 텍스트 없음")
 
             clean_deck_name = doc_name.replace("::", "_").strip()
             if clean_deck_name not in decks:
@@ -251,7 +252,7 @@ def generate_anki_package(selected_records: list) -> bytes:
                 fields=[
                     f'<img src="{fname}">',
                     f"📑 {src_info}",
-                    "확인 완료"
+                    caption.replace("\n", "<br>")
                 ]
             )
             decks[clean_deck_name].add_note(note)
@@ -296,19 +297,29 @@ if uploaded_files:
                 if suffix == ".pdf":
                     doc = fitz.open(stream=file_bytes, filetype="pdf")
                     for p_idx, page in enumerate(doc):
+                        # 페이지 텍스트 추출 (캡션 및 키워드 분석용)
+                        page_text = page.get_text()
+
                         for img_idx, img in enumerate(page.get_images(full=True)):
                             img_data = doc.extract_image(img[0])
                             b = img_data["image"]
                             ext = img_data["ext"]
+
                             if is_meaningful_image(b):
                                 fname = f"{base_name}_p{p_idx+1}_{img_idx+1}.{ext}"
+                                
+                                # 의료/해부학 키워드가 포함된 페이지의 이미지는 기본 선택(True)으로 자동 선별
+                                medical_keywords = ['artery', 'nerve', 'vein', 'muscle', 'foramen', 'nucleus', 'glossa', 'heart', 'brain', 'bone', 'arteria', 'nervus']
+                                has_keyword = any(kw in page_text.lower() for kw in medical_keywords)
+
                                 extracted.append({
                                     "id": f"{base_name}_{p_idx}_{img_idx}",
                                     "fname": fname,
                                     "bytes": b,
                                     "src_info": f"{base_name} (p.{p_idx+1})",
                                     "doc_name": base_name,
-                                    "selected": True
+                                    "caption": page_text.strip()[:300],  # 상위 300자 캡션 저장
+                                    "selected": has_keyword
                                 })
                             else:
                                 skipped += 1
@@ -329,6 +340,7 @@ if uploaded_files:
                                         "bytes": b,
                                         "src_info": f"{base_name} (#{counter})",
                                         "doc_name": base_name,
+                                        "caption": "PPT 슬라이드 이미지",
                                         "selected": True
                                     })
                                     counter += 1
@@ -340,7 +352,7 @@ if uploaded_files:
             st.session_state.extracted_items = extracted
 
             if extracted:
-                st.success(f"총 {len(extracted)}개의 도표를 찾았습니다. ({skipped}개 배경/필기 자동 제외) 아래에서 제외할 사진을 체크 해제하세요.")
+                st.success(f"총 {len(extracted)}개의 도표를 찾았습니다. ({skipped}개 배경/필기 자동 제외) 핵심 키워드가 감지된 도표가 우선 선택되었습니다.")
             else:
                 st.warning("유효한 본문 이미지가 감지되지 않았습니다.")
 
