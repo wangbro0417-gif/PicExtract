@@ -133,14 +133,14 @@ st.markdown("""
     <span class="badge">STUDY ACCELERATOR</span>
     <div class="main-title">PicExtract</div>
     <div class="main-subtitle">
-        강의 슬라이드에서 핵심 도표를 추출하고, <b>원하지 않는 이미지를 선별 해제</b>하여<br>
+        강의 슬라이드에서 핵심 도표를 추출하고, <b>원하지 않는 이미지와 표를 선별 해제</b>하여<br>
         필요한 자료만 <b>Anki 덱(.apkg)</b> 및 압축 파일로 일괄 저장하세요.
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 
-# ----------------- 필터링 엔진 -----------------
+# ----------------- 필터링 엔진 (표 및 극단적 비율 차단 추가) -----------------
 def is_meaningful_image(image_bytes: bytes) -> bool:
     if len(image_bytes) < 5120:
         return False
@@ -148,6 +148,11 @@ def is_meaningful_image(image_bytes: bytes) -> bool:
         with Image.open(io.BytesIO(image_bytes)) as img:
             w, h = img.size
             if w < 150 or h < 150:
+                return False
+
+            # 표(Table)나 가로/세로로 극단적으로 긴 텍스트 박스 형태 차단 (비율 2.5배 초과/미만)
+            aspect_ratio = w / h
+            if aspect_ratio > 2.5 or aspect_ratio < 0.4:
                 return False
 
             thumb = img.convert("RGBA").resize((150, 150), Image.Resampling.BOX)
@@ -285,7 +290,7 @@ uploaded_files = st.file_uploader(
 
 if uploaded_files:
     if st.button(f"▶ {len(uploaded_files)}개 문서 도표 1차 추출", type="primary"):
-        with st.spinner("배경 템플릿과 필기를 분석하여 도표를 추출하는 중입니다..."):
+        with st.spinner("배경 템플릿과 표, 필기를 분석하여 도표를 추출하는 중입니다..."):
             extracted = []
             skipped = 0
 
@@ -297,7 +302,6 @@ if uploaded_files:
                 if suffix == ".pdf":
                     doc = fitz.open(stream=file_bytes, filetype="pdf")
                     for p_idx, page in enumerate(doc):
-                        # 페이지 텍스트 추출 (캡션 및 키워드 분석용)
                         page_text = page.get_text()
 
                         for img_idx, img in enumerate(page.get_images(full=True)):
@@ -308,7 +312,6 @@ if uploaded_files:
                             if is_meaningful_image(b):
                                 fname = f"{base_name}_p{p_idx+1}_{img_idx+1}.{ext}"
                                 
-                                # 의료/해부학 키워드가 포함된 페이지의 이미지는 기본 선택(True)으로 자동 선별
                                 medical_keywords = ['artery', 'nerve', 'vein', 'muscle', 'foramen', 'nucleus', 'glossa', 'heart', 'brain', 'bone', 'arteria', 'nervus']
                                 has_keyword = any(kw in page_text.lower() for kw in medical_keywords)
 
@@ -318,7 +321,7 @@ if uploaded_files:
                                     "bytes": b,
                                     "src_info": f"{base_name} (p.{p_idx+1})",
                                     "doc_name": base_name,
-                                    "caption": page_text.strip()[:300],  # 상위 300자 캡션 저장
+                                    "caption": page_text.strip()[:300],
                                     "selected": has_keyword
                                 })
                             else:
@@ -352,7 +355,7 @@ if uploaded_files:
             st.session_state.extracted_items = extracted
 
             if extracted:
-                st.success(f"총 {len(extracted)}개의 도표를 찾았습니다. ({skipped}개 배경/필기 자동 제외) 핵심 키워드가 감지된 도표가 우선 선택되었습니다.")
+                st.success(f"총 {len(extracted)}개의 도표를 찾았습니다. ({skipped}개 표/배경 자동 제외 완료)")
             else:
                 st.warning("유효한 본문 이미지가 감지되지 않았습니다.")
 
@@ -361,7 +364,6 @@ if uploaded_files:
 if st.session_state.extracted_items:
     st.write("---")
     
-    # 상단 툴바: 제목 및 전체 선택/해제 컨트롤
     tool_col1, tool_col2, tool_col3 = st.columns([3, 1, 1])
     with tool_col1:
         st.subheader(f"🖼️ 도표 선별 갤러리 ({len(st.session_state.extracted_items)}장)")
@@ -380,12 +382,10 @@ if st.session_state.extracted_items:
 
     st.caption("저장하지 않을 도표는 체크를 풀어주세요. 체크된 도표만 덱과 압축 파일로 패키징됩니다.")
 
-    # 4열 바둑판 그리드 배치
     cols = st.columns(4)
     for idx, item in enumerate(st.session_state.extracted_items):
         with cols[idx % 4]:
             st.image(item["bytes"], use_container_width=True)
-            # 체크박스 상태 동기화
             item["selected"] = st.checkbox(
                 f"선택 #{idx+1}",
                 value=item.get("selected", True),
@@ -394,7 +394,6 @@ if st.session_state.extracted_items:
             st.markdown(f"<div class='gallery-caption'>{item['src_info']}</div>", unsafe_allow_html=True)
             st.write("")
 
-    # 최종 선택된 이미지 집계
     selected_records = [item for item in st.session_state.extracted_items if item["selected"]]
 
     st.write("---")
@@ -408,7 +407,6 @@ if st.session_state.extracted_items:
 
         final_apkg_data = generate_anki_package(selected_records)
 
-        # 2단 다운로드 버튼
         col1, col2 = st.columns(2)
         with col1:
             st.markdown('<div class="anki-btn">', unsafe_allow_html=True)
