@@ -130,15 +130,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ----------------- 시각적 해시 생성 함수 (눈으로 같은 그림 판별) -----------------
+# ----------------- 시각적 해시 생성 함수 -----------------
 def get_visual_hash(image_bytes: bytes) -> str:
     try:
         with Image.open(io.BytesIO(image_bytes)) as img:
-            # 흑백으로 변환 후 16x16 크기로 축소하여 대강의 형태(픽셀 패턴) 추출
             small = img.convert("L").resize((16, 16), Image.Resampling.BILINEAR)
             pixels = list(small.getdata())
             avg = sum(pixels) / len(pixels)
-            # 평균 밝기를 기준으로 0과 1의 비트 패턴(해시 문자열) 생성
             bits = "".join(['1' if p > avg else '0' for p in pixels])
             return bits
     except Exception:
@@ -296,7 +294,7 @@ if uploaded_files:
             extracted = []
             skipped = 0
             duplicate_count = 0
-            seen_visual_hashes = set()  # 시각적 중복 제거를 위한 해시 집합
+            seen_visual_hashes = set()
 
             for uploaded_file in uploaded_files:
                 base_name = Path(uploaded_file.name).stem
@@ -314,11 +312,10 @@ if uploaded_files:
                             ext = img_data["ext"]
 
                             if is_meaningful_image(b):
-                                # 시각적 해시 추출 (형태가 같으면 바이트가 달라도 같은 해시가 나옴)
                                 v_hash = get_visual_hash(b)
                                 if v_hash and v_hash in seen_visual_hashes:
                                     duplicate_count += 1
-                                    continue  # 시각적으로 동일한 이미지면 배제
+                                    continue
                                 
                                 if v_hash:
                                     seen_visual_hashes.add(v_hash)
@@ -434,7 +431,7 @@ if st.session_state.extracted_items:
             st.download_button(
                 label=f"⚡ 선택된 Anki 덱 다운로드 ({len(selected_records)}장)",
                 data=final_apkg_data,
-                file_name=f"{st.name if 'name' in st else st.session_state.batch_name}.apkg",
+                file_name=f"{st.session_state.batch_name}.apkg",
                 mime="application/octet-stream"
             )
             st.markdown('</div>', unsafe_allow_html=True)
