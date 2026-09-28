@@ -2,6 +2,7 @@ import io
 import random
 import tempfile
 import zipfile
+import hashlib  # 중복 이미지 해시 비교를 위해 추가
 from pathlib import Path
 import streamlit as st
 import fitz  # PyMuPDF
@@ -12,7 +13,7 @@ import genanki
 st.set_page_config(
     page_title="PicExtract - Image Extractor & Anki Deck Builder",
     page_icon="🧬",
-    layout="wide"  # 4열 배치를 쾌적하게 보기 위해 wide 모드 적용
+    layout="wide"
 )
 
 # ----------------- 모던 클리니컬 UI 스타일링 (CSS) -----------------
@@ -22,7 +23,6 @@ st.markdown("""
         background-color: #F1F5F9;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     }
-    /* 4열 그리드 가독성을 고려한 최대 본문 폭 확장 */
     .block-container {
         max-width: 1100px !important;
         padding-top: 2rem !important;
@@ -65,15 +65,6 @@ st.markdown("""
         border-radius: 16px !important;
         padding: 24px 20px !important;
         box-shadow: 0 4px 12px rgba(37, 99, 235, 0.03);
-    }
-    /* 갤러리 이미지 카드 스타일 */
-    .gallery-img-container {
-        background-color: #FFFFFF;
-        border: 1px solid #E2E8F0;
-        border-radius: 8px;
-        padding: 6px;
-        margin-bottom: 4px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.02);
     }
     .gallery-caption {
         font-size: 11px;
@@ -133,14 +124,14 @@ st.markdown("""
     <span class="badge">STUDY ACCELERATOR</span>
     <div class="main-title">PicExtract</div>
     <div class="main-subtitle">
-        강의 슬라이드에서 핵심 도표를 추출하고, <b>원하지 않는 이미지와 표를 선별 해제</b>하여<br>
+        강의 슬라이드에서 핵심 도표를 추출하고, <b>중복 이미지와 표를 자동 배제</b>하여<br>
         필요한 자료만 <b>Anki 덱(.apkg)</b> 및 압축 파일로 일괄 저장하세요.
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 
-# ----------------- 필터링 엔진 (표 및 극단적 비율 차단 추가) -----------------
+# ----------------- 필터링 엔진 -----------------
 def is_meaningful_image(image_bytes: bytes) -> bool:
     if len(image_bytes) < 5120:
         return False
@@ -150,7 +141,6 @@ def is_meaningful_image(image_bytes: bytes) -> bool:
             if w < 150 or h < 150:
                 return False
 
-            # 표(Table)나 가로/세로로 극단적으로 긴 텍스트 박스 형태 차단 (비율 2.5배 초과/미만)
             aspect_ratio = w / h
             if aspect_ratio > 2.5 or aspect_ratio < 0.4:
                 return False
@@ -159,7 +149,6 @@ def is_meaningful_image(image_bytes: bytes) -> bool:
             pixels = list(thumb.getdata())
             total_pixels = len(pixels)
 
-            # 중앙 영역 공백 검사 (배경 템플릿 테두리 제거)
             center_blank = sum(
                 1 for y in range(25, 125) for x in range(25, 125)
                 if pixels[y * 150 + x][3] <= 20
@@ -169,7 +158,6 @@ def is_meaningful_image(image_bytes: bytes) -> bool:
             if (center_blank / 10000) > 0.95:
                 return False
 
-            # 필기 패턴 검사
             non_bg_count = 0
             visible_count = 0
             non_bg_colors = []
@@ -194,7 +182,7 @@ def is_meaningful_image(image_bytes: bytes) -> bool:
     return True
 
 
-# ----------------- Anki 패키지 빌더 (캡션 연동형) -----------------
+# ----------------- Anki 패키지 빌더 -----------------
 def generate_anki_package(selected_records: list) -> bytes:
     model_id = random.randrange(1 << 30, 1 << 31)
     my_model = genanki.Model(
@@ -203,7 +191,7 @@ def generate_anki_package(selected_records: list) -> bytes:
         fields=[
             {"name": "Image"},
             {"name": "SourceInfo"},
-            {"name": "CaptionText"},  # 텍스트 캡션 필드 추가
+            {"name": "CaptionText"},
         ],
         templates=[
             {
@@ -290,9 +278,11 @@ uploaded_files = st.file_uploader(
 
 if uploaded_files:
     if st.button(f"▶ {len(uploaded_files)}개 문서 도표 1차 추출", type="primary"):
-        with st.spinner("배경 템플릿과 표, 필기를 분석하여 도표를 추출하는 중입니다..."):
+        with st.spinner("배경, 표, 중복 이미지를 걸러내며 도표를 추출하는 중입니다..."):
             extracted = []
             skipped = 0
+            duplicate_count = 0
+            seen_image_hashes = set()  # 중복 제거를 위한 해시 집합
 
             for uploaded_file in uploaded_files:
                 base_name = Path(uploaded_file.name).stem
@@ -310,6 +300,14 @@ if uploaded_files:
                             ext = img_data["ext"]
 
                             if is_meaningful_image(b):
+                                # 이미지 바이너리의 MD5 해시값 계산 (완벽한 중복 판별용)
+                                img_hash = hashlib.md5(b).hexdigest()
+                                if img_hash in seen_image_hashes:
+                                    duplicate_count += 1
+                                    continue  # 이미 추출된 동일한 사진이면 배제
+                                
+                                seen_image_hashes.add(img_hash)
+
                                 fname = f"{base_name}_p{p_idx+1}_{img_idx+1}.{ext}"
                                 
                                 medical_keywords = ['artery', 'nerve', 'vein', 'muscle', 'foramen', 'nucleus', 'glossa', 'heart', 'brain', 'bone', 'arteria', 'nervus']
@@ -335,6 +333,13 @@ if uploaded_files:
                             if item.filename.startswith("ppt/media/"):
                                 b = z.read(item)
                                 if is_meaningful_image(b):
+                                    img_hash = hashlib.md5(b).hexdigest()
+                                    if img_hash in seen_image_hashes:
+                                        duplicate_count += 1
+                                        continue
+                                    
+                                    seen_image_hashes.add(img_hash)
+
                                     ext = Path(item.filename).suffix
                                     fname = f"{base_name}_img{counter}{ext}"
                                     extracted.append({
@@ -355,12 +360,12 @@ if uploaded_files:
             st.session_state.extracted_items = extracted
 
             if extracted:
-                st.success(f"총 {len(extracted)}개의 도표를 찾았습니다. ({skipped}개 표/배경 자동 제외 완료)")
+                st.success(f"총 {len(extracted)}개의 도표를 찾았습니다. (표/배경 {skipped}개, 중복 이미지 {duplicate_count}장 자동 배제 완료)")
             else:
                 st.warning("유효한 본문 이미지가 감지되지 않았습니다.")
 
 
-# ----------------- 추출 결과 갤러리 및 선택 UI (4열 그리드) -----------------
+# ----------------- 추출 결과 갤러리 및 선택 UI -----------------
 if st.session_state.extracted_items:
     st.write("---")
     
