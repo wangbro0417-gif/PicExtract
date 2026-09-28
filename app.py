@@ -2,7 +2,6 @@ import io
 import random
 import tempfile
 import zipfile
-import hashlib  # 중복 이미지 해시 비교를 위해 추가
 from pathlib import Path
 import streamlit as st
 import fitz  # PyMuPDF
@@ -124,11 +123,26 @@ st.markdown("""
     <span class="badge">STUDY ACCELERATOR</span>
     <div class="main-title">PicExtract</div>
     <div class="main-subtitle">
-        강의 슬라이드에서 핵심 도표를 추출하고, <b>중복 이미지와 표를 자동 배제</b>하여<br>
+        강의 슬라이드에서 핵심 도표를 추출하고, <b>시각적 중복 이미지와 표를 완벽히 자동 배제</b>하여<br>
         필요한 자료만 <b>Anki 덱(.apkg)</b> 및 압축 파일로 일괄 저장하세요.
     </div>
 </div>
 """, unsafe_allow_html=True)
+
+
+# ----------------- 시각적 해시 생성 함수 (눈으로 같은 그림 판별) -----------------
+def get_visual_hash(image_bytes: bytes) -> str:
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            # 흑백으로 변환 후 16x16 크기로 축소하여 대강의 형태(픽셀 패턴) 추출
+            small = img.convert("L").resize((16, 16), Image.Resampling.BILINEAR)
+            pixels = list(small.getdata())
+            avg = sum(pixels) / len(pixels)
+            # 평균 밝기를 기준으로 0과 1의 비트 패턴(해시 문자열) 생성
+            bits = "".join(['1' if p > avg else '0' for p in pixels])
+            return bits
+    except Exception:
+        return None
 
 
 # ----------------- 필터링 엔진 -----------------
@@ -278,11 +292,11 @@ uploaded_files = st.file_uploader(
 
 if uploaded_files:
     if st.button(f"▶ {len(uploaded_files)}개 문서 도표 1차 추출", type="primary"):
-        with st.spinner("배경, 표, 중복 이미지를 걸러내며 도표를 추출하는 중입니다..."):
+        with st.spinner("시각적 중복 이미지와 표를 분석하며 도표를 추출하는 중입니다..."):
             extracted = []
             skipped = 0
             duplicate_count = 0
-            seen_image_hashes = set()  # 중복 제거를 위한 해시 집합
+            seen_visual_hashes = set()  # 시각적 중복 제거를 위한 해시 집합
 
             for uploaded_file in uploaded_files:
                 base_name = Path(uploaded_file.name).stem
@@ -300,13 +314,14 @@ if uploaded_files:
                             ext = img_data["ext"]
 
                             if is_meaningful_image(b):
-                                # 이미지 바이너리의 MD5 해시값 계산 (완벽한 중복 판별용)
-                                img_hash = hashlib.md5(b).hexdigest()
-                                if img_hash in seen_image_hashes:
+                                # 시각적 해시 추출 (형태가 같으면 바이트가 달라도 같은 해시가 나옴)
+                                v_hash = get_visual_hash(b)
+                                if v_hash and v_hash in seen_visual_hashes:
                                     duplicate_count += 1
-                                    continue  # 이미 추출된 동일한 사진이면 배제
+                                    continue  # 시각적으로 동일한 이미지면 배제
                                 
-                                seen_image_hashes.add(img_hash)
+                                if v_hash:
+                                    seen_visual_hashes.add(v_hash)
 
                                 fname = f"{base_name}_p{p_idx+1}_{img_idx+1}.{ext}"
                                 
@@ -333,12 +348,13 @@ if uploaded_files:
                             if item.filename.startswith("ppt/media/"):
                                 b = z.read(item)
                                 if is_meaningful_image(b):
-                                    img_hash = hashlib.md5(b).hexdigest()
-                                    if img_hash in seen_image_hashes:
+                                    v_hash = get_visual_hash(b)
+                                    if v_hash and v_hash in seen_visual_hashes:
                                         duplicate_count += 1
                                         continue
                                     
-                                    seen_image_hashes.add(img_hash)
+                                    if v_hash:
+                                        seen_visual_hashes.add(v_hash)
 
                                     ext = Path(item.filename).suffix
                                     fname = f"{base_name}_img{counter}{ext}"
@@ -360,7 +376,7 @@ if uploaded_files:
             st.session_state.extracted_items = extracted
 
             if extracted:
-                st.success(f"총 {len(extracted)}개의 도표를 찾았습니다. (표/배경 {skipped}개, 중복 이미지 {duplicate_count}장 자동 배제 완료)")
+                st.success(f"총 {len(extracted)}개의 도표를 찾았습니다. (표/배경 {skipped}개, 시각적 중복 이미지 {duplicate_count}장 자동 배제 완료)")
             else:
                 st.warning("유효한 본문 이미지가 감지되지 않았습니다.")
 
@@ -418,7 +434,7 @@ if st.session_state.extracted_items:
             st.download_button(
                 label=f"⚡ 선택된 Anki 덱 다운로드 ({len(selected_records)}장)",
                 data=final_apkg_data,
-                file_name=f"{st.session_state.batch_name}.apkg",
+                file_name=f"{st.name if 'name' in st else st.session_state.batch_name}.apkg",
                 mime="application/octet-stream"
             )
             st.markdown('</div>', unsafe_allow_html=True)
